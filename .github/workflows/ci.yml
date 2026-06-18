@@ -1,0 +1,157 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop, "feature/**"]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+
+# ── Jobs ──────────────────────────────────────────────────────────────────────
+
+jobs:
+
+  # ── 1. Lint ───────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install ruff
+        run: pip install ruff==0.4.4
+
+      - name: Run ruff
+        run: ruff check . --output-format=github
+
+  # ── 2. Unit tests (no external services) ─────────────────────────────────
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run unit tests
+        env:
+          MLFLOW_TRACKING_URI: file:./mlruns
+          DATABASE_URL: postgresql://trading_user:trading_pass@localhost:5432/trading_db
+        run: |
+          pytest tests/unit/ \
+            -v \
+            --tb=short \
+            --cov=ab_testing \
+            --cov=strategies \
+            --cov=api/schemas.py \
+            --cov-report=xml \
+            --cov-report=term-missing
+
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
+
+  # ── 3. Integration tests (requires PostgreSQL) ────────────────────────────
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER:     trading_user
+          POSTGRES_PASSWORD: trading_pass
+          POSTGRES_DB:       trading_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trading_user -d trading_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Initialise database schema
+        env:
+          DATABASE_URL: postgresql://trading_user:trading_pass@localhost:5432/trading_db
+        run: python -c "from data.database.connection import init_db; init_db()"
+
+      - name: Run integration tests
+        env:
+          DATABASE_URL:        postgresql://trading_user:trading_pass@localhost:5432/trading_db
+          MLFLOW_TRACKING_URI: file:./mlruns
+          POSTGRES_HOST:       localhost
+          POSTGRES_USER:       trading_user
+          POSTGRES_PASSWORD:   trading_pass
+          POSTGRES_DB:         trading_db
+        run: |
+          pytest tests/integration/ \
+            -v \
+            --tb=short
+
+  # ── 4. Docker build verification ──────────────────────────────────────────
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: lint
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build API image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.api
+          push: false
+          tags: trading-api:ci
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+      - name: Build Dashboard image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.dashboard
+          push: false
+          tags: trading-dashboard:ci
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max

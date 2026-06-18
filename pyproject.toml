@@ -1,0 +1,65 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [
+    ".venv",
+    "__pycache__",
+    ".git",
+    "migrations",
+    "alembic",
+]
+
+[tool.ruff.lint]
+# E/W = pycodestyle errors/warnings, F = pyflakes, I = isort, UP = pyupgrade
+select = ["E", "F", "W", "I", "UP"]
+ignore = [
+    "E501",   # line too long — black/formatter handles this
+    "E741",   # ambiguous variable names (l, O, I) — used in ML loops
+    "F401",   # unused import — some are intentional re-exports
+    "F811",   # redefinition of unused name — common in test fixtures
+    "UP007",  # use X | Y for unions — keep Optional[] for readability
+    "UP035",  # deprecated typing imports — not all targets support 3.12 syntax
+    "I001",   # import sorting — applied progressively
+    "W503",   # line break before binary operator
+    "E402",   # module level import not at top — needed for path setup
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["F401", "F811", "E302", "E303"]
+
+# ── Pytest ────────────────────────────────────────────────────────────────────
+
+[tool.pytest.ini_options]
+testpaths       = ["tests"]
+python_files    = ["test_*.py"]
+python_classes  = ["Test*"]
+python_functions = ["test_*"]
+addopts         = "-v --tb=short -ra"
+filterwarnings  = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]
+
+# ── Coverage ──────────────────────────────────────────────────────────────────
+
+[tool.coverage.run]
+source = ["."]
+omit   = [
+    ".venv/*",
+    "tests/*",
+    "*/migrations/*",
+    "scripts/*",
+    "airflow/*",
+]
+
+[tool.coverage.report]
+show_missing   = true
+skip_covered   = false
+fail_under     = 60
+exclude_lines  = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "pass",
+    "\\.\\.\\.\\s*$",
+]
